@@ -1,0 +1,298 @@
+---
+swagger: '2.0'
+info:
+  description: Bands catalog API
+  title: Bands
+  version: "1.0"
+schemes:
+- https
+
+paths:
+  "/bands":
+    post:
+      tags:
+      - bands
+      operationId: CreateBand
+      summary: Create a Band
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      parameters:
+      - in: body
+        name: NewBand
+        required: true
+        schema:
+          "$ref": "#/definitions/CreateBandRequest"
+      responses:
+        '200':
+          description: Success
+          schema:
+            "$ref": "#/definitions/CreateBandResponse"
+          headers:
+            Access-Control-Allow-Origin:
+              type: string
+              description: URI that may access the resource
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: '200'
+            responseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        uri: "http://${nlb_dns}/v1/bands"
+        payloadFormatVersion: 1.0
+        connectionId: "${vpc_link_id}"
+        httpMethod: POST
+        type: HTTP_PROXY
+        connectionType: VPC_LINK
+    get:
+      tags:
+      - bands
+      summary: Lists all the Bands exposing a standard pagination
+      operationId: GetBands
+      produces:
+      - application/json
+      parameters:
+      - name: offset
+        in: query
+        description: Page offset
+        required: false
+        type: string
+      - name: page
+        in: query
+        description: Page number
+        required: false
+        type: string
+      responses:
+        '200':
+          description: Success
+          schema:
+            "$ref": "#/definitions/Bands"
+          headers:
+            Access-Control-Allow-Origin:
+              type: string
+              description: URI that may access the resource
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: '200'
+            responseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestParameters:
+          integration.request.querystring.page: method.request.querystring.page
+          integration.request.querystring.offset: method.request.querystring.offset
+        uri: "http://${nlb_dns}/v1/bands"
+        payloadFormatVersion: 1.0
+        connectionId: "${vpc_link_id}"
+        httpMethod: GET
+        type: HTTP_PROXY
+        connectionType: VPC_LINK
+  "/bands/{bandId}":
+    get:
+      tags:
+      - bands
+      summary: Finds a band by ID
+      operationId: GetBandById
+      produces:
+      - application/json
+      parameters:
+      - name: bandId
+        in: path
+        description: Band ID
+        required: true
+        type: string
+      responses:
+        '200':
+          description: Success
+          schema:
+            "$ref": "#/definitions/Band"
+          headers:
+            Access-Control-Allow-Origin:
+              type: string
+              description: URI that may access the resource
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: '200'
+            responseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestParameters:
+          integration.request.path.bandId: method.request.path.bandId
+        uri: "http://${nlb_dns}/v1/bands/{bandId}"
+        payloadFormatVersion: 1.0
+        connectionId: "${vpc_link_id}"
+        httpMethod: GET
+        type: HTTP_PROXY
+        connectionType: VPC_LINK
+    delete:
+      tags:
+      - bands
+      summary: Deletes a band by ID
+      operationId: DeleteBandById
+      parameters:
+      - name: bandId
+        in: path
+        description: Band ID
+        required: true
+        type: string
+      responses:
+        '204':
+          description: No content
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: '204'
+        requestParameters:
+          integration.request.path.bandId: method.request.path.bandId
+        uri: "http://${nlb_dns}/v1/bands/{bandId}"
+        payloadFormatVersion: 1.0
+        connectionId: "${vpc_link_id}"
+        httpMethod: DELETE
+        type: HTTP_PROXY
+        connectionType: VPC_LINK
+definitions:
+  Bands:
+    type: array
+    items:
+      "$ref": "#/definitions/Band"
+  Band:
+    type: object
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      genre:
+        type: string
+      members:
+        type: array
+        items:
+          type: string
+  CreateBandRequest:
+    type: object
+    properties:
+      name:
+        type: string
+      genre:
+        type: string
+      members:
+        type: array
+        items:
+          type: string
+  CreateBandResponse:
+    type: object
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      genre:
+        type: string
+      members:
+        type: array
+        items:
+          type: string
+  Empty:
+    type: object
+x-amazon-apigateway-documentation:
+  version: v2.1
+  createdDate: '2016-11-17T07:03:59Z'
+  documentationParts:
+  - location:
+      type: API
+    properties:
+      info:
+        description: Bands catalog API
+  - location:
+      type: METHOD
+      method: GET
+    properties:
+      tags:
+      - bands
+      description: Bands catalog
+  - location:
+      type: METHOD
+      path: "/bands/{bandId}"
+      method: GET
+    properties:
+      tags:
+      - bands
+      summary: Finds a specific band
+  - location:
+      type: METHOD
+      path: "/bands"
+      method: GET
+    properties:
+      tags:
+      - bands
+      summary: List all bands
+  - location:
+      type: METHOD
+      path: "/bands"
+      method: POST
+    properties:
+      tags:
+      - bands
+      summary: Create a band
+  - location:
+      type: PATH_PARAMETER
+      path: "/bands/{bandId}"
+      method: "*"
+      name: bandId
+    properties:
+      description: The id of the band to retrieve
+  - location:
+      type: QUERY_PARAMETER
+      path: "/bands"
+      method: GET
+      name: page
+    properties:
+      description: Page number of results to return.
+  - location:
+      type: QUERY_PARAMETER
+      path: "/bands"
+      method: GET
+      name: type
+    properties:
+      description: The type of band to retrieve
+  - location:
+      type: REQUEST_BODY
+      path: "/bands"
+      method: POST
+    properties:
+      description: band object that needs to be added to the store
+  - location:
+      type: RESPONSE
+      method: "*"
+      statusCode: '200'
+    properties:
+      description: Successful operation
+  - location:
+      type: RESPONSE_HEADER
+      method: OPTIONS
+      statusCode: '200'
+      name: Access-Control-Allow-Headers
+    properties:
+      description: Used in response to a preflight request to indicate which HTTP
+        headers can be used when making the request.
+  - location:
+      type: RESPONSE_HEADER
+      method: OPTIONS
+      statusCode: '200'
+      name: Access-Control-Allow-Methods
+    properties:
+      description: Method or methods allowed when accessing the resource
+  - location:
+      type: RESPONSE_HEADER
+      method: "*"
+      statusCode: '200'
+      name: Access-Control-Allow-Origin
+    properties:
+      description: URI that may access the resource
+  - location:
+      type: RESPONSE_HEADER
+      method: GET
+      statusCode: '200'
+      name: Content-Type
+    properties:
+      description: Media type of request

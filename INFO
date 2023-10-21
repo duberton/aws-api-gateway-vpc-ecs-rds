@@ -1,0 +1,363 @@
+# Building your complete AWS back-end environment, a step-by-step guide with API Gateway, VPC, ECS, and RDS
+
+- In this publication we will walk through the process of exposing a back-end API using key players inside AWS, all orchestrated by Terraform, a tool that manages infrastructure as code.
+- Upcoming sections will dig deeper into the components as well as highlight pieces of Terraform code accompanied by brief descriptions and key points that are all worth mentioning
+- Upon completing this article, you'll find a fully operational end-to-end API on a AWS environment prepared to handle incoming requests.
+
+#### Table of contents
+---
+1. What you'll learn in this publication
+2. Base project
+3. Prerequisites
+4. AWS resources creation
+	1. Bootstrap resources
+	2. VPC
+	3. Availability/Compute/Data
+		1. Network Load Balancer
+		2. ECS
+		3. RDS
+	4. REST API Gateway created from an OpenAPI definition
+
+#### 1. What you'll learn in this publication
+---
+- This publication is designed to offer a practical, hands-on experience by delving into select AWS services and their underlying components and dependencies. The upcoming write-up will guide you through a step-by-step exploration of these AWS services.
+	- VPC
+	- API Gateway
+	- Load Balancer
+	- ECS
+	- RDS
+- Ultimately, all the AWS resources referenced above will expose a back-end API, developed with Spring and Kotlin
+- It's worth noting that you won't find a detailed, step-by-step guide for creating the back-end API code itself. The existing code for the API is simply means to an end, which is the successful deployment of the AWS resources.
+#### 2. Base project
+---
+- The base project utilized for all the experimentation can be visualized and git cloned over here: https://github.com/duberton/aws-api-gateway-vpc-ecs-rds
+- Directory structure overview:
+	- infrastructure: Terraform code
+	- openapi: OpenAPI specification
+	- src: Kotlin's APIs code
+#### 3. Prerequisites
+---
+- A AWS account
+	- While using a root account may present security issues, it makes up for the setbacks of fine-tuning IAM users/roles for specific resources. Choosing to move forward with a root account, it's extremely advisable to have a MFA method configured
+- AWS CLI
+	- https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+	- ``aws configure``prompts to enter the access key and secret key as well as both default region and default output
+- Terraform
+	- https://developer.hashicorp.com/terraform/downloads
+- Docker
+	- https://www.docker.com/products/docker-desktop/
+- Git
+
+*Important to note that the detailed, step-by-step execution guide is in the README file of the base project. Link to it: https://github.com/duberton/aws-api-gateway-vpc-ecs-rds
+
+### 4. AWS
+#### 4.1. Bootstrap resources
+- First off, its essential to have a few foundational resources such as a container registry and identity/role resources all set up before delving into the core components. These are the resources:
+	- ECR: a container registry so we can push the back-end API application image
+	- IAM: to ensure successful API interactions with other AWS services, access permissions must be granted to both the ECS agent (execution role) and ECS containers (task role).
+	- Secret Manager: to have a secure and centralized repository for storing secrets such as credentials and API Keys
+- You can find more by looking up at the link: __INSERT_LINK__
+#### 4.2. VPC
+---
+- Moving to the first core resource, the VPC. We'll leverage from a VPC Terraform module that encapsulates and abstracts a set of resources. We'll get into the details on most of them shortly.
+
+```hcl
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+
+  name = "name"
+  cidr = "10.99.0.0/24"
+
+  azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  public_subnets  = ["10.99.0.0/28", "10.99.0.16/28", "10.99.0.32/28"]
+  private_subnets = ["10.99.0.48/28", "10.99.0.64/28", "10.99.0.80/28"]
+
+  enable_nat_gateway  = true
+  single_nat_gateway  = true
+  private_subnet_tags = tomap({ "type" = "private" })
+  public_subnet_tags  = tomap({ "type" = "public" })
+}
+```
+
+Do not underestimate the succinct nature of the 15 lines of code presented above. They do have the capacity to yield a substantial number of implicit resources within your AWS Console. We're gonna address some of them below:
+
+Terraform plan output of all the VPC resources:
+```
+$ terraform plan -json | jq --slurp --raw-output 'map(select(.type == "planned_change") | .change.resource.addr)'
+
+module.vpc.module.vpc.aws_vpc.this[0]
+module.vpc.module.vpc.aws_subnet.public[0]
+module.vpc.module.vpc.aws_subnet.public[1]
+module.vpc.module.vpc.aws_subnet.public[2]
+module.vpc.module.vpc.aws_subnet.private[0]
+module.vpc.module.vpc.aws_subnet.private[1]
+module.vpc.module.vpc.aws_subnet.private[2]
+module.vpc.module.vpc.aws_eip.nat[0]
+module.vpc.module.vpc.aws_internet_gateway.this[0]
+module.vpc.module.vpc.aws_nat_gateway.this[0]
+module.vpc.module.vpc.aws_route_table.public[0]
+module.vpc.module.vpc.aws_route_table.private[0]
+module.vpc.module.vpc.aws_route.public_internet_gateway[0]
+module.vpc.module.vpc.aws_route_table_association.public[0]
+module.vpc.module.vpc.aws_route_table_association.public[1]
+module.vpc.module.vpc.aws_route_table_association.public[2]
+module.vpc.module.vpc.aws_route_table_association.private[0]
+module.vpc.module.vpc.aws_route_table_association.private[1]
+module.vpc.module.vpc.aws_route_table_association.private[2]
+module.vpc.module.vpc.aws_default_network_acl.this[0]
+module.vpc.module.vpc.aws_route.private_nat_gateway[0]
+module.vpc.module.vpc.aws_default_route_table.default[0]
+module.vpc.module.vpc.aws_default_security_group.this[0]
+```
+
+- A VPC featuring a CIDR block of 10.99.0.0/24, allocating 256 possible host addresses, 254 of them being usable
+- Internet Gateway: resources that need to reach public internet do so via an Internet Gateway.
+- Public subnets provisioned in 3 different AZs, each one having a CIDR block prefix of /28, thus, supporting 14 usable IPs
+	- A public subnet is determined by the association to a Internet Gateway. The IG acts as the bridge between the VPC and public internet. This association is done by a resource called Route Table
+- NAT Gateway: a NAT Gateway is typically used to provide outbound internet connectivity to private resources via a static public IP address and to do so it uses a Elastic IP
+- Private subnets provisioned in 3 different AZs, each one having a CIDR block prefix of /28, thus, supporting 14 usable IPs
+	- A private subnet lacks direct internet connectivity. That is achieved by not associating the subnet to a route table route that points to an Internet Gateway, yet, in situations where these private subnets need outbound internet access, they should be linked to a route table that routes to a Network Address Translation Gateway (NAT Gateway).
+- Elastic IP: Elastic IPs allocate public static IPs. They're usually allocated to a NAT Gateway so private resources can benefit from a consistent and predictable source IP when reaching a target destination on the public internet.
+#### 4.3. Network Load Balancer
+---
+- With our VPC now in place, we're gonna put the foundations on for the deployment of our back-end service into a ECS (Elastic Container Service) cluster. However, before doing that, we will take care of having a resource that distributes the load between all the replicas by setting up a Network Load Balancer. The NLB is currently the sole option offering a direct integration with the API Gateway REST API VPC Link functionality that will be build later.
+
+```
+module "nlb" {
+  source = "terraform-aws-modules/alb/aws"
+
+  name = "nlb"
+
+  load_balancer_type = "network"
+
+  vpc_id          = data.aws_vpc.vpc.id
+  subnets         = data.aws_subnets.private.ids
+  security_groups = [data.aws_security_group.sg_nlb.id]
+
+  internal = true
+
+  target_groups = [
+    {
+      backend_protocol     = "TCP"
+      backend_port         = 8080
+      target_type          = "ip"
+      deregistration_delay = 10
+      health_check = {
+        enabled             = true
+        interval            = 40
+        path                = "/actuator/health"
+        port                = 8080
+        healthy_threshold   = 2
+        unhealthy_threshold = 2
+        timeout             = 2
+        matcher             = "200-299"
+      }
+    }
+  ]
+
+  http_tcp_listeners = [
+    {
+      port               = 80
+      action_type        = "forward"
+      protocol           = "TCP"
+      target_group_index = 0
+    }
+  ]
+}
+```
+
+- Again, utilizing a Terraform module, in a single resource, we're able to create multiple resources:
+	- NLB
+	- Target Group
+	 - Load Balancer Listener
+ - Specs:
+	 - A load balancer is a resource that lives within a VPC, so we set the VPC, its private (due to its internal nature) subnets as well as a SG
+	 - The SG follows strict inbound and outbound rules by only allowing ingress traffic to come from and to the port 80 which is the port that the LB listens on and forwards to
+		 - Note: Although the LB listens on port 80, soon we will that all the incoming requests will come through the API Gateway HTTPS protocol, which performs SSL termination and forwards the request to the configured back-end endpoint (the NLB) over the VPC Link using the HTTP port.
+	 - The target group takes care of configuring how a LB, given a http listener, will hit the application instances. So it sets the protocol, a container port, a target type ('ip' when working with ECS Fargate) and health check definitions
+
+#### 4.3.1. ECS
+---
+- Amazon ECS (Elastic Container Service) with Fargate is a service that simplifies deploying and managing containers with no underlying infrastructure
+- First, we create a 100% Fargate capacity provider cluster
+```
+module "ecs" {
+  source = "terraform-aws-modules/ecs/aws"
+
+  cluster_name = "ecs-cluster"
+
+  fargate_capacity_providers = {
+    FARGATE = {
+      default_capacity_provider_strategy = {
+        weight = 100
+      }
+    }
+  }
+}
+```
+
+- Then we map out a ECS service. The service is a component that takes cares of accommodating tasks. We'll get into a detailed overview below
+```
+resource "aws_ecs_service" "ecs_service" {
+  name                   = "service_name"
+  cluster                = module.ecs.cluster_id
+  task_definition        = aws_ecs_task_definition.ecs_task_definition.arn
+  desired_count          = 2
+  enable_execute_command = true
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    weight            = 100
+  }
+
+  network_configuration {
+    subnets         = data.aws_subnets.private.ids
+    security_groups = [data.aws_security_group.sg_ecs.id]
+  }
+
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
+  load_balancer {
+    target_group_arn = data.aws_lb_target_group.tg.arn
+    container_name   = "container_name"
+    container_port   = "8080"
+  }
+}
+```
+- Specs
+	- Cluster: reference to the newly created cluster
+	- Task definition: reference to the definitions of the task
+	- Desired count: number of replicas of such task
+	- Capacity provider strategy: specifies the compute resources that the tasks will run on
+	- Network configuration: Sets the subnets as well as the SGs
+		- Here we again see a strict/lean set of ingress/egress rules
+		- Ingress allowing exclusively port 8080, the container port
+		- Egress tailored to allow communication with the RDS port database private subnets. Additionally, we enable access to a default CIDR block on ports https/http due to internet connectivity demands for services like secret manager, which we reach via a public endpoint
+	- Deployment maximum and minimum percent strategy:
+		- Given a desired count of tasks, the minimum percent amount of tasks, that, during a deployment, should be running
+		- Given a desired count of tasks, the maximum percent amount of tasks, that during a deployment, the service can go up to
+		- For instance, the following definition:
+			- Minimum of 50%
+			- Maximum of 200%
+			- Desired count of 8
+				- During a deployment, it would keep at least 4 tasks up and up to 16 tasks (8 existing and 8 new).
+	- Load Balancer
+		- Configures the target group that will register new targets/instances to the load balancer
+```
+resource "aws_ecs_task_definition" "ecs_task_definition" {
+  family = "application_name"
+
+  container_definitions = <<DEFINITION
+  [
+    {
+      "name": "application_name",
+      "image": "${data.aws_ecr_repository.ecr.repository_url}:latest",
+      "secrets": [
+        {
+          "name": "DB_USER",
+          "valueFrom": "${local.db_user}"
+        },
+        {
+          "name": "DB_PASSWORD",
+          "valueFrom": "${local.db_password}"
+        }
+      ],
+      "environment": [
+        {
+          "name": "DB_URL",
+          "value": "jdbc:postgresql://${local.db_url}/postgres"
+        }
+      ],
+      "essential": true,
+      "portMappings": [
+        {
+          "name": "http",
+          "containerPort": 8080,
+          "hostPort": 8080
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-region": "us-east-1",
+          "awslogs-group": "/aws/ecs/application_name",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl http://localhost:8080/actuator/health"
+        ],
+        "interval": 5,
+        "timeout": 2,
+        "retries": 3,
+        "startPeriod": 40
+      },
+      "cpu": 512,
+      "memory": 1024
+    }
+  ]
+  DEFINITION
+
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  memory                   = "2048"
+  cpu                      = "1024"
+  execution_role_arn       = data.aws_iam_role.execution_role.arn
+  task_role_arn            = data.aws_iam_role.task_role.arn
+}
+```
+Now, the task definition not only designates which containers to run but also tells how these containers are configured within an ECS task.
+- Specs:
+	- Container definitions represent an array of containers, enabling the configuration of a task with one or more containers.
+	- Image: points to the repository/image:tag of the container image
+	- Environment: plain text environment variables key-value pairs suitable for non-sensitive data
+	- Secrets: secure access to sensitive data such as secrets stored in secure services like Secret Manager or System Manager Parameter Store while still maintaining the data unrevealed and secure. Exposes the key as an environment variable to the container.
+	- Essential: Boolean value that defines whether or not the container is essential. If the task is composed of more than a single container and a essential container fails a health check probe then the rest of the non-essential containers are stopped
+	- Port mappings: defines the port that the container exposes
+	- Log configurations: determines the place where logs are stored, in our case, awslogs translates to a CloudWatch log group
+	- Execution role: it is a configuration that dictates the policies attached to the role that the ECS agent will adhere to during task execution, for example, the permission to pull a image from ECR or to create a log group
+	- Task role: configures the role that will contain the policies that grant permissions to the container itself.
+	- At the root level of the task definition, CPU and memory settings encompass the total resources allocated for the entire task, including all its containers. In contrast, at the container definition level, these parameters specify the resources allocated to each individual container within the task.
+#### 4.3.3. RDS
+- With our application up and running, it's time to address data storage. That's where a RDS database comes into play. In this scenario, we'll be delving into the world of PostgreSQL, utilizing a straightforward Terraform module that efficiently creates a streamlined resource.
+
+```
+module "db" {
+  source = "terraform-aws-modules/rds/aws"
+
+  db_name    = "bands"
+  identifier = "bands-postgres-14"
+
+  username = local.db_user
+  password = local.db_password
+
+  engine                      = "postgres"
+  engine_version              = "14"
+  major_engine_version        = "14"
+  family                      = "postgres14"
+  instance_class              = "db.t3.micro"
+  allocated_storage           = 5
+  storage_encrypted           = false
+  skip_final_snapshot         = true
+  maintenance_window          = "Mon:00:00-Mon:03:00"
+  backup_window               = "03:00-06:00"
+  backup_retention_period     = 1
+  deletion_protection         = false
+  manage_master_user_password = false
+
+  port                   = "5432"
+  vpc_security_group_ids = [data.aws_security_group.sg_db.id]
+  subnet_ids             = data.aws_subnets.private.ids
+
+  create_db_instance        = true
+  create_db_parameter_group = false
+  create_db_subnet_group    = true
+  create_db_option_group    = false
+}
+```
+
+#### 5. API Gateway

@@ -1,0 +1,66 @@
+name: App pipeline
+
+on:
+  push:
+    paths:
+      - src/**
+  pull_request:
+    paths:
+      - src/**
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    name: Build, publish and rollout
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone source code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: AWS ECR login
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_APP_ECR_REPO }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Build and push image to ECR
+        id: build-push-image
+        env:
+          IMAGE_TAG: ${{ secrets.AWS_APP_ECR_REPO }}:${{ github.sha }}
+        run: |
+          docker build -t ${{ secrets.AWS_APP_ECR_REPO }}:${{ github.sha }} .
+          docker push ${{ secrets.AWS_APP_ECR_REPO }}:${{ github.sha }}
+          echo "image=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ vars.APP_NAME }} --query taskDefinition > task-definition.json
+
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ vars.APP_NAME }}
+          image: ${{ steps.build-push-image.outputs.image }}
+          environment-variables: "DD_VERSION=${{ github.sha }}"
+
+      - name: Deploy Amazon ECS task definition
+        id: deploy-task-definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-definition.outputs.task-definition }}
+          service: ${{ vars.APP_NAME }}
+          cluster: '${{ vars.APP_NAME }}-cluster'
+          wait-for-service-stability: true
