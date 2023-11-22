@@ -176,3 +176,41 @@ data "aws_iam_policy_document" "task_assume_role" {
     ]
   }
 }
+
+resource "aws_iam_role" "api_gateway_role" {
+  name               = "api-gateway-lambda-role"
+  path               = "/"
+  assume_role_policy = data.aws_iam_policy_document.api_gateway_assume_role.json
+}
+
+data "aws_iam_policy_document" "api_gateway_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["apigateway.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_lambda_role_policy_attachment" {
+  role       = aws_iam_role.api_gateway_role.name
+  policy_arn = aws_iam_policy.api_gateway_lambda_role_policy.arn
+}
+
+resource "aws_iam_policy" "api_gateway_lambda_role_policy" {
+  name   = "api_gateway_lambda_role_policy"
+  path   = "/"
+  policy = data.aws_iam_policy_document.api_gateway_lambda_role_policy.json
+}
+
+data "aws_iam_policy_document" "api_gateway_lambda_role_policy" {
+  statement {
+    resources = ["*"]
+
+    actions = [
+      "lambda:InvokeFunction"
+    ]
+  }
+}

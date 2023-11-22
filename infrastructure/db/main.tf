@@ -3,6 +3,11 @@ provider "aws" {
 }
 
 module "db" {
-  source   = "./modules/db"
+  source   = "./modules/rds"
+  vpc_name = "${var.application_name}-vpc"
+}
+
+module "dynamodb" {
+  source   = "./modules/dynamodb"
   vpc_name = "${var.application_name}-vpc"
 }
